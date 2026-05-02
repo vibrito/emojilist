@@ -14,10 +14,10 @@ struct PersistenceController {
     static let preview: PersistenceController = {
         let result = PersistenceController(inMemory: true)
         let viewContext = result.container.viewContext
-        for _ in 0..<10 {
-            let newItem = Item(context: viewContext)
-            newItem.timestamp = Date()
-        }
+        let emoji = EmojiItem(context: viewContext)
+        emoji.name = "shipit"
+        emoji.url = "https://github.githubassets.com/images/icons/emoji/shipit.png?v8"
+
         do {
             try viewContext.save()
         } catch {

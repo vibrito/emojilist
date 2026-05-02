@@ -6,9 +6,16 @@
 //
 
 import SwiftUI
+import CoreData
 
 struct ContentView: View {
-    @State private var emojis: [Emoji] = []
+    @Environment(\.managedObjectContext) private var viewContext
+
+    @FetchRequest(
+        sortDescriptors: [NSSortDescriptor(keyPath: \EmojiItem.name, ascending: true)],
+        animation: .default)
+    private var emojis: FetchedResults<EmojiItem>
+
     @State private var isLoading = false
     @State private var errorMessage: String?
 
@@ -31,11 +38,11 @@ struct ContentView: View {
 
             List(emojis) { emoji in
                 HStack {
-                    Text(emoji.name)
+                    Text(emoji.name ?? "")
 
                     Spacer()
 
-                    AsyncImage(url: URL(string: emoji.url)) { image in
+                    AsyncImage(url: URL(string: emoji.url ?? "")) { image in
                         image
                             .resizable()
                             .scaledToFit()
@@ -49,6 +56,7 @@ struct ContentView: View {
         .padding()
     }
 
+    @MainActor
     func fetchEmojis() async {
         isLoading = true
         errorMessage = nil
@@ -64,15 +72,43 @@ struct ContentView: View {
 
             let response = try JSONDecoder().decode(EmojiResponse.self, from: data)
 
-            emojis = response.map { key, value in
-                Emoji(name: key, url: value)
-            }
-            .sorted { $0.name < $1.name }
+            try save(response)
 
         } catch {
             errorMessage = error.localizedDescription
         }
 
         isLoading = false
+    }
+
+    private func save(_ response: EmojiResponse) throws {
+        let request: NSFetchRequest<EmojiItem> = EmojiItem.fetchRequest()
+        let storedEmojis = try viewContext.fetch(request)
+        var storedEmojisByName: [String: EmojiItem] = [:]
+
+        for emoji in storedEmojis {
+            guard let name = emoji.name else { continue }
+
+            if storedEmojisByName[name] == nil {
+                storedEmojisByName[name] = emoji
+            } else {
+                viewContext.delete(emoji)
+            }
+        }
+
+        for (name, url) in response {
+            let emoji = storedEmojisByName[name] ?? EmojiItem(context: viewContext)
+            emoji.name = name
+            emoji.url = url
+        }
+
+        let responseNames = Set(response.keys)
+        for emoji in storedEmojis where emoji.name.map({ !responseNames.contains($0) }) ?? false {
+            viewContext.delete(emoji)
+        }
+
+        if viewContext.hasChanges {
+            try viewContext.save()
+        }
     }
 }
