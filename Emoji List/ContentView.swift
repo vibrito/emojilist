@@ -58,6 +58,8 @@ struct ContentView: View {
 
     @MainActor
     func fetchEmojis() async {
+        guard emojis.isEmpty else { return }
+
         isLoading = true
         errorMessage = nil
 
