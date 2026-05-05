@@ -5,7 +5,14 @@
         <attribute name="name" optional="YES" attributeType="String"/>
         <attribute name="url" optional="YES" attributeType="String"/>
     </entity>
+    <entity name="UserAvatar" representedClassName="UserAvatar" syncable="YES">
+        <attribute name="avatarData" optional="YES" attributeType="Binary"/>
+        <attribute name="avatarURL" optional="YES" attributeType="String"/>
+        <attribute name="githubID" optional="NO" attributeType="Integer 64" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="login" optional="YES" attributeType="String"/>
+    </entity>
     <elements>
         <element name="EmojiItem" positionX="-63" positionY="-18" width="128" height="74"/>
+        <element name="UserAvatar" positionX="-54" positionY="27" width="128" height="89"/>
     </elements>
 </model>

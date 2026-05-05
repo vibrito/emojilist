@@ -20,3 +20,17 @@ public class EmojiItem: NSManagedObject {
 }
 
 extension EmojiItem: Identifiable {}
+
+@objc(UserAvatar)
+public class UserAvatar: NSManagedObject {
+    @nonobjc public class func fetchRequest() -> NSFetchRequest<UserAvatar> {
+        NSFetchRequest<UserAvatar>(entityName: "UserAvatar")
+    }
+
+    @NSManaged public var avatarData: Data?
+    @NSManaged public var avatarURL: String?
+    @NSManaged public var githubID: Int64
+    @NSManaged public var login: String?
+}
+
+extension UserAvatar: Identifiable {}
