@@ -49,6 +49,12 @@ struct ContentView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .buttonStyle(.bordered)
+
+                    NavigationLink("Apple Repos") {
+                        AppleRepoListView()
+                    }
+                    .frame(maxWidth: .infinity)
+                    .buttonStyle(.bordered)
                 }
 
                 HStack(spacing: 12) {
@@ -291,6 +297,108 @@ enum UserAvatarError: LocalizedError {
         case .notFound:
             return "User not found"
         }
+    }
+}
+
+struct AppleRepo: Decodable, Identifiable {
+    let id: Int
+    let fullName: String
+    let isPrivate: Bool
+    let description: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case fullName = "full_name"
+        case isPrivate = "private"
+        case description
+    }
+}
+
+struct AppleRepoListView: View {
+    @State private var repos: [AppleRepo] = []
+    @State private var page = 1
+    @State private var isLoading = false
+    @State private var canLoadMore = true
+    @State private var errorMessage: String?
+
+    var body: some View {
+        List {
+            ForEach(repos) { repo in
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(repo.fullName)
+                        .font(.headline)
+
+                    Text(repo.isPrivate ? "Private" : "Public")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    if let description = repo.description, !description.isEmpty {
+                        Text(description)
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding(.vertical, 4)
+                .onAppear {
+                    if repo.id == repos.last?.id {
+                        Task {
+                            await loadRepos()
+                        }
+                    }
+                }
+            }
+
+            if isLoading {
+                HStack {
+                    Spacer()
+                    ProgressView()
+                    Spacer()
+                }
+            }
+
+            if let errorMessage {
+                Text(errorMessage)
+                    .foregroundColor(.red)
+            }
+        }
+        .navigationTitle("Apple Repos")
+        .task {
+            await loadRepos()
+        }
+    }
+
+    @MainActor
+    private func loadRepos() async {
+        guard !isLoading, canLoadMore else { return }
+
+        isLoading = true
+        errorMessage = nil
+
+        do {
+            let newRepos = try await fetchAppleRepos(page: page)
+            repos.append(contentsOf: newRepos)
+            page += 1
+            canLoadMore = newRepos.count == 10
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+
+        isLoading = false
+    }
+
+    private func fetchAppleRepos(page: Int) async throws -> [AppleRepo] {
+        var components = URLComponents(string: "https://api.github.com/orgs/apple/repos")
+        components?.queryItems = [
+            URLQueryItem(name: "per_page", value: "10"),
+            URLQueryItem(name: "page", value: "\(page)")
+        ]
+
+        guard let url = components?.url else {
+            throw URLError(.badURL)
+        }
+
+        let (data, _) = try await URLSession.shared.data(from: url)
+        return try JSONDecoder().decode([AppleRepo].self, from: data)
     }
 }
 
