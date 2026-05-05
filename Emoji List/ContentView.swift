@@ -18,42 +18,69 @@ struct ContentView: View {
 
     @State private var isLoading = false
     @State private var errorMessage: String?
+    @State private var selectedEmojiName: String?
+    @State private var selectedEmojiURL: String?
 
     var body: some View {
-        VStack(spacing: 20) {
-            Button("Get Emoji") {
-                Task {
-                    await fetchEmojis()
-                }
-            }
-
-            if isLoading {
-                ProgressView()
-            }
-
-            if let errorMessage {
-                Text(errorMessage)
-                    .foregroundColor(.red)
-            }
-
-            List(emojis) { emoji in
-                HStack {
-                    Text(emoji.name ?? "")
-
-                    Spacer()
-
-                    AsyncImage(url: URL(string: emoji.url ?? "")) { image in
-                        image
-                            .resizable()
-                            .scaledToFit()
-                    } placeholder: {
-                        ProgressView()
+        NavigationStack {
+            VStack(spacing: 20) {
+                Button("Random Emoji") {
+                    Task {
+                        await showRandomEmoji()
                     }
-                    .frame(width: 32, height: 32)
+                }
+
+                NavigationLink("Emoji List") {
+                    EmojiGridView()
+                }
+
+                if isLoading {
+                    ProgressView()
+                }
+
+                if let errorMessage {
+                    Text(errorMessage)
+                        .foregroundColor(.red)
+                }
+
+                if let selectedEmojiName, let selectedEmojiURL {
+                    VStack(spacing: 12) {
+                        AsyncImage(url: URL(string: selectedEmojiURL)) { image in
+                            image
+                                .resizable()
+                                .scaledToFit()
+                        } placeholder: {
+                            ProgressView()
+                        }
+                        .frame(width: 96, height: 96)
+
+                        Text(selectedEmojiName)
+                            .font(.headline)
+                    }
                 }
             }
+            .padding()
+            .navigationTitle("Emoji")
         }
-        .padding()
+    }
+
+    @MainActor
+    func showRandomEmoji() async {
+        await fetchEmojis()
+
+        do {
+            let cachedEmojis = try fetchCachedEmojis()
+
+            guard let emoji = cachedEmojis.randomElement() else {
+                errorMessage = "No emojis available"
+                return
+            }
+
+            selectedEmojiName = emoji.name
+            selectedEmojiURL = emoji.url
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     @MainActor
@@ -84,8 +111,7 @@ struct ContentView: View {
     }
 
     private func save(_ response: EmojiResponse) throws {
-        let request: NSFetchRequest<EmojiItem> = EmojiItem.fetchRequest()
-        let storedEmojis = try viewContext.fetch(request)
+        let storedEmojis = try fetchCachedEmojis()
         var storedEmojisByName: [String: EmojiItem] = [:]
 
         for emoji in storedEmojis {
@@ -112,5 +138,50 @@ struct ContentView: View {
         if viewContext.hasChanges {
             try viewContext.save()
         }
+    }
+
+    private func fetchCachedEmojis() throws -> [EmojiItem] {
+        let request: NSFetchRequest<EmojiItem> = EmojiItem.fetchRequest()
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \EmojiItem.name, ascending: true)]
+
+        return try viewContext.fetch(request)
+    }
+}
+
+struct EmojiGridView: View {
+    private let columns = [
+        GridItem(.adaptive(minimum: 96), spacing: 16)
+    ]
+
+    @FetchRequest(
+        sortDescriptors: [NSSortDescriptor(keyPath: \EmojiItem.name, ascending: true)],
+        animation: .default)
+    private var emojis: FetchedResults<EmojiItem>
+
+    var body: some View {
+        ScrollView {
+            LazyVGrid(columns: columns, spacing: 16) {
+                ForEach(emojis) { emoji in
+                    VStack(spacing: 8) {
+                        AsyncImage(url: URL(string: emoji.url ?? "")) { image in
+                            image
+                                .resizable()
+                                .scaledToFit()
+                        } placeholder: {
+                            ProgressView()
+                        }
+                        .frame(width: 48, height: 48)
+
+                        Text(emoji.name ?? "")
+                            .font(.caption)
+                            .multilineTextAlignment(.center)
+                            .lineLimit(2)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 96)
+                }
+            }
+            .padding()
+        }
+        .navigationTitle("Emoji List")
     }
 }
