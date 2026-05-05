@@ -131,8 +131,8 @@ struct ContentView: View {
                 return
             }
 
-            let response = try await fetchUserAvatarResponse(login: searchTerm)
-            let avatarData = try await fetchAvatarData(from: response.avatarURL)
+            let response = try await GitHubAPIClient.shared.fetchUserAvatar(login: searchTerm)
+            let avatarData = try await GitHubAPIClient.shared.fetchImageData(from: response.avatarURL)
             let userAvatar = try saveUserAvatar(response, avatarData: avatarData)
 
             selectedUserLogin = userAvatar.login
@@ -173,19 +173,9 @@ struct ContentView: View {
         isLoading = true
         errorMessage = nil
 
-        guard let url = URL(string: "https://api.github.com/emojis") else {
-            errorMessage = "Invalid URL"
-            isLoading = false
-            return
-        }
-
         do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-
-            let response = try JSONDecoder().decode(EmojiResponse.self, from: data)
-
+            let response = try await GitHubAPIClient.shared.fetchEmojis()
             try saveEmojis(response)
-
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -234,31 +224,6 @@ struct ContentView: View {
         return try viewContext.fetch(request)
     }
 
-    private func fetchUserAvatarResponse(login: String) async throws -> UserAvatarResponse {
-        guard let escapedLogin = login.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
-              let url = URL(string: "https://api.github.com/users/\(escapedLogin)")
-        else {
-            throw URLError(.badURL)
-        }
-
-        let (data, response) = try await URLSession.shared.data(from: url)
-
-        if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 404 {
-            throw UserAvatarError.notFound
-        }
-
-        return try JSONDecoder().decode(UserAvatarResponse.self, from: data)
-    }
-
-    private func fetchAvatarData(from urlString: String) async throws -> Data {
-        guard let url = URL(string: urlString) else {
-            throw URLError(.badURL)
-        }
-
-        let (data, _) = try await URLSession.shared.data(from: url)
-        return data
-    }
-
     private func saveUserAvatar(_ response: UserAvatarResponse, avatarData: Data) throws -> UserAvatar {
         let userAvatar = try fetchCachedUser(login: response.login) ?? UserAvatar(context: viewContext)
         userAvatar.login = response.login
@@ -276,43 +241,6 @@ struct ContentView: View {
         request.predicate = NSPredicate(format: "login =[c] %@", login)
 
         return try viewContext.fetch(request).first
-    }
-}
-
-struct UserAvatarResponse: Decodable {
-    let login: String
-    let id: Int
-    let avatarURL: String
-
-    enum CodingKeys: String, CodingKey {
-        case login
-        case id
-        case avatarURL = "avatar_url"
-    }
-}
-
-enum UserAvatarError: LocalizedError {
-    case notFound
-
-    var errorDescription: String? {
-        switch self {
-        case .notFound:
-            return "User not found"
-        }
-    }
-}
-
-struct AppleRepo: Decodable, Identifiable {
-    let id: Int
-    let fullName: String
-    let isPrivate: Bool
-    let description: String?
-
-    enum CodingKeys: String, CodingKey {
-        case id
-        case fullName = "full_name"
-        case isPrivate = "private"
-        case description
     }
 }
 
@@ -377,7 +305,7 @@ struct AppleRepoListView: View {
         errorMessage = nil
 
         do {
-            let newRepos = try await fetchAppleRepos(page: page)
+            let newRepos = try await GitHubAPIClient.shared.fetchAppleRepos(page: page)
             repos.append(contentsOf: newRepos)
             page += 1
             canLoadMore = newRepos.count == 10
@@ -386,21 +314,6 @@ struct AppleRepoListView: View {
         }
 
         isLoading = false
-    }
-
-    private func fetchAppleRepos(page: Int) async throws -> [AppleRepo] {
-        var components = URLComponents(string: "https://api.github.com/orgs/apple/repos")
-        components?.queryItems = [
-            URLQueryItem(name: "per_page", value: "10"),
-            URLQueryItem(name: "page", value: "\(page)")
-        ]
-
-        guard let url = components?.url else {
-            throw URLError(.badURL)
-        }
-
-        let (data, _) = try await URLSession.shared.data(from: url)
-        return try JSONDecoder().decode([AppleRepo].self, from: data)
     }
 }
 
@@ -562,13 +475,13 @@ struct CachedEmojiImage: View {
             return
         }
 
-        guard !isLoading, let imageURL = URL(string: url) else { return }
+        guard !isLoading else { return }
 
         isLoading = true
         defer { isLoading = false }
 
         do {
-            let (data, _) = try await URLSession.shared.data(from: imageURL)
+            let data = try await GitHubAPIClient.shared.fetchImageData(from: url)
 
             guard let downloadedImage = UIImage(data: data),
                   let emoji = try viewContext.existingObject(with: emojiID) as? EmojiItem
