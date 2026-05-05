@@ -28,86 +28,88 @@ struct ContentView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 20) {
-                VStack(spacing: 12) {
-                    NavigationLink("Emoji List") {
-                        EmojiGridView()
-                    }
-                    .frame(maxWidth: .infinity)
-                    .buttonStyle(.bordered)
+            ScrollView {
+                VStack(spacing: 20) {
+                    VStack(spacing: 12) {
+                        NavigationLink("Emoji List") {
+                            EmojiGridView()
+                        }
+                        .frame(maxWidth: .infinity)
+                        .buttonStyle(.bordered)
 
-                    Button("Random Emoji") {
-                        Task {
-                            await showRandomEmoji()
+                        Button("Random Emoji") {
+                            Task {
+                                await showRandomEmoji()
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .buttonStyle(.bordered)
+
+                        NavigationLink("Avatar List") {
+                            AvatarGridView()
+                        }
+                        .frame(maxWidth: .infinity)
+                        .buttonStyle(.bordered)
+
+                        NavigationLink("Apple Repos") {
+                            AppleRepoListView()
+                        }
+                        .frame(maxWidth: .infinity)
+                        .buttonStyle(.bordered)
+                    }
+
+                    HStack(spacing: 12) {
+                        TextField("Username", text: $username)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .textFieldStyle(.roundedBorder)
+
+                        Button("Search") {
+                            Task {
+                                await searchUserAvatar()
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+
+                    if isLoading {
+                        ProgressView()
+                    }
+
+                    if let errorMessage {
+                        Text(errorMessage)
+                            .foregroundColor(.red)
+                    }
+
+                    if let selectedEmojiID, let selectedEmojiName, let selectedEmojiURL {
+                        VStack(spacing: 12) {
+                            CachedEmojiImage(
+                                emojiID: selectedEmojiID,
+                                url: selectedEmojiURL,
+                                size: 96
+                            )
+
+                            Text(selectedEmojiName)
+                                .font(.headline)
                         }
                     }
-                    .frame(maxWidth: .infinity)
-                    .buttonStyle(.bordered)
 
-                    NavigationLink("Avatar List") {
-                        AvatarGridView()
-                    }
-                    .frame(maxWidth: .infinity)
-                    .buttonStyle(.bordered)
+                    if let selectedUserLogin, let selectedUserAvatarData,
+                       let avatarImage = UIImage(data: selectedUserAvatarData) {
+                        VStack(spacing: 12) {
+                            Image(uiImage: avatarImage)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 96, height: 96)
 
-                    NavigationLink("Apple Repos") {
-                        AppleRepoListView()
-                    }
-                    .frame(maxWidth: .infinity)
-                    .buttonStyle(.bordered)
-                }
-
-                HStack(spacing: 12) {
-                    TextField("Username", text: $username)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .textFieldStyle(.roundedBorder)
-
-                    Button("Search") {
-                        Task {
-                            await searchUserAvatar()
+                            Text(selectedUserLogin)
+                                .font(.headline)
                         }
                     }
-                    .buttonStyle(.bordered)
-                    .disabled(username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
-
-                if isLoading {
-                    ProgressView()
-                }
-
-                if let errorMessage {
-                    Text(errorMessage)
-                        .foregroundColor(.red)
-                }
-
-                if let selectedEmojiID, let selectedEmojiName, let selectedEmojiURL {
-                    VStack(spacing: 12) {
-                        CachedEmojiImage(
-                            emojiID: selectedEmojiID,
-                            url: selectedEmojiURL,
-                            size: 96
-                        )
-
-                        Text(selectedEmojiName)
-                            .font(.headline)
-                    }
-                }
-
-                if let selectedUserLogin, let selectedUserAvatarData,
-                   let avatarImage = UIImage(data: selectedUserAvatarData) {
-                    VStack(spacing: 12) {
-                        Image(uiImage: avatarImage)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: 96, height: 96)
-
-                        Text(selectedUserLogin)
-                            .font(.headline)
-                    }
-                }
+                .padding()
             }
-            .padding()
             .navigationTitle("Emoji")
         }
     }
