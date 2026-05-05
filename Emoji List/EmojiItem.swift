@@ -16,6 +16,7 @@ public class EmojiItem: NSManagedObject {
 
     @NSManaged public var name: String?
     @NSManaged public var url: String?
+    @NSManaged public var imageData: Data?
 }
 
 extension EmojiItem: Identifiable {}
