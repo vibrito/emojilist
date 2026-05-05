@@ -7,6 +7,7 @@
 
 import SwiftUI
 import CoreData
+import UIKit
 
 struct ContentView: View {
     @Environment(\.managedObjectContext) private var viewContext
@@ -18,20 +19,57 @@ struct ContentView: View {
 
     @State private var isLoading = false
     @State private var errorMessage: String?
+    @State private var selectedEmojiID: NSManagedObjectID?
     @State private var selectedEmojiName: String?
     @State private var selectedEmojiURL: String?
+    @State private var username = ""
+    @State private var selectedUserLogin: String?
+    @State private var selectedUserAvatarData: Data?
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 20) {
-                Button("Random Emoji") {
-                    Task {
-                        await showRandomEmoji()
+                VStack(spacing: 12) {
+                    NavigationLink("Emoji List") {
+                        EmojiGridView()
                     }
+                    .frame(maxWidth: .infinity)
+                    .buttonStyle(.bordered)
+
+                    Button("Random Emoji") {
+                        Task {
+                            await showRandomEmoji()
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .buttonStyle(.bordered)
+
+                    NavigationLink("Avatar List") {
+                        AvatarGridView()
+                    }
+                    .frame(maxWidth: .infinity)
+                    .buttonStyle(.bordered)
+
+                    NavigationLink("Apple Repos") {
+                        AppleRepoListView()
+                    }
+                    .frame(maxWidth: .infinity)
+                    .buttonStyle(.bordered)
                 }
 
-                NavigationLink("Emoji List") {
-                    EmojiGridView()
+                HStack(spacing: 12) {
+                    TextField("Username", text: $username)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .textFieldStyle(.roundedBorder)
+
+                    Button("Search") {
+                        Task {
+                            await searchUserAvatar()
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
 
                 if isLoading {
@@ -43,18 +81,28 @@ struct ContentView: View {
                         .foregroundColor(.red)
                 }
 
-                if let selectedEmojiName, let selectedEmojiURL {
+                if let selectedEmojiID, let selectedEmojiName, let selectedEmojiURL {
                     VStack(spacing: 12) {
-                        AsyncImage(url: URL(string: selectedEmojiURL)) { image in
-                            image
-                                .resizable()
-                                .scaledToFit()
-                        } placeholder: {
-                            ProgressView()
-                        }
-                        .frame(width: 96, height: 96)
+                        CachedEmojiImage(
+                            emojiID: selectedEmojiID,
+                            url: selectedEmojiURL,
+                            size: 96
+                        )
 
                         Text(selectedEmojiName)
+                            .font(.headline)
+                    }
+                }
+
+                if let selectedUserLogin, let selectedUserAvatarData,
+                   let avatarImage = UIImage(data: selectedUserAvatarData) {
+                    VStack(spacing: 12) {
+                        Image(uiImage: avatarImage)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 96, height: 96)
+
+                        Text(selectedUserLogin)
                             .font(.headline)
                     }
                 }
@@ -62,6 +110,38 @@ struct ContentView: View {
             .padding()
             .navigationTitle("Emoji")
         }
+    }
+
+    @MainActor
+    func searchUserAvatar() async {
+        let searchTerm = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !searchTerm.isEmpty else { return }
+
+        isLoading = true
+        errorMessage = nil
+
+        do {
+            if let cachedUser = try fetchCachedUser(login: searchTerm),
+               let avatarData = cachedUser.avatarData {
+                selectedUserLogin = cachedUser.login
+                selectedUserAvatarData = avatarData
+                isLoading = false
+                return
+            }
+
+            let response = try await fetchUserAvatarResponse(login: searchTerm)
+            let avatarData = try await fetchAvatarData(from: response.avatarURL)
+            let userAvatar = try saveUserAvatar(response, avatarData: avatarData)
+
+            selectedUserLogin = userAvatar.login
+            selectedUserAvatarData = userAvatar.avatarData
+        } catch {
+            errorMessage = error.localizedDescription
+            selectedUserLogin = nil
+            selectedUserAvatarData = nil
+        }
+
+        isLoading = false
     }
 
     @MainActor
@@ -76,6 +156,7 @@ struct ContentView: View {
                 return
             }
 
+            selectedEmojiID = emoji.objectID
             selectedEmojiName = emoji.name
             selectedEmojiURL = emoji.url
         } catch {
@@ -101,7 +182,7 @@ struct ContentView: View {
 
             let response = try JSONDecoder().decode(EmojiResponse.self, from: data)
 
-            try save(response)
+            try saveEmojis(response)
 
         } catch {
             errorMessage = error.localizedDescription
@@ -110,7 +191,7 @@ struct ContentView: View {
         isLoading = false
     }
 
-    private func save(_ response: EmojiResponse) throws {
+    private func saveEmojis(_ response: EmojiResponse) throws {
         let storedEmojis = try fetchCachedEmojis()
         var storedEmojisByName: [String: EmojiItem] = [:]
 
@@ -126,6 +207,10 @@ struct ContentView: View {
 
         for (name, url) in response {
             let emoji = storedEmojisByName[name] ?? EmojiItem(context: viewContext)
+            if emoji.url != url {
+                emoji.imageData = nil
+            }
+
             emoji.name = name
             emoji.url = url
         }
@@ -146,6 +231,175 @@ struct ContentView: View {
 
         return try viewContext.fetch(request)
     }
+
+    private func fetchUserAvatarResponse(login: String) async throws -> UserAvatarResponse {
+        guard let escapedLogin = login.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let url = URL(string: "https://api.github.com/users/\(escapedLogin)")
+        else {
+            throw URLError(.badURL)
+        }
+
+        let (data, response) = try await URLSession.shared.data(from: url)
+
+        if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 404 {
+            throw UserAvatarError.notFound
+        }
+
+        return try JSONDecoder().decode(UserAvatarResponse.self, from: data)
+    }
+
+    private func fetchAvatarData(from urlString: String) async throws -> Data {
+        guard let url = URL(string: urlString) else {
+            throw URLError(.badURL)
+        }
+
+        let (data, _) = try await URLSession.shared.data(from: url)
+        return data
+    }
+
+    private func saveUserAvatar(_ response: UserAvatarResponse, avatarData: Data) throws -> UserAvatar {
+        let userAvatar = try fetchCachedUser(login: response.login) ?? UserAvatar(context: viewContext)
+        userAvatar.login = response.login
+        userAvatar.githubID = Int64(response.id)
+        userAvatar.avatarURL = response.avatarURL
+        userAvatar.avatarData = avatarData
+
+        try viewContext.save()
+        return userAvatar
+    }
+
+    private func fetchCachedUser(login: String) throws -> UserAvatar? {
+        let request: NSFetchRequest<UserAvatar> = UserAvatar.fetchRequest()
+        request.fetchLimit = 1
+        request.predicate = NSPredicate(format: "login =[c] %@", login)
+
+        return try viewContext.fetch(request).first
+    }
+}
+
+struct UserAvatarResponse: Decodable {
+    let login: String
+    let id: Int
+    let avatarURL: String
+
+    enum CodingKeys: String, CodingKey {
+        case login
+        case id
+        case avatarURL = "avatar_url"
+    }
+}
+
+enum UserAvatarError: LocalizedError {
+    case notFound
+
+    var errorDescription: String? {
+        switch self {
+        case .notFound:
+            return "User not found"
+        }
+    }
+}
+
+struct AppleRepo: Decodable, Identifiable {
+    let id: Int
+    let fullName: String
+    let isPrivate: Bool
+    let description: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case fullName = "full_name"
+        case isPrivate = "private"
+        case description
+    }
+}
+
+struct AppleRepoListView: View {
+    @State private var repos: [AppleRepo] = []
+    @State private var page = 1
+    @State private var isLoading = false
+    @State private var canLoadMore = true
+    @State private var errorMessage: String?
+
+    var body: some View {
+        List {
+            ForEach(repos) { repo in
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(repo.fullName)
+                        .font(.headline)
+
+                    Text(repo.isPrivate ? "Private" : "Public")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    if let description = repo.description, !description.isEmpty {
+                        Text(description)
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding(.vertical, 4)
+                .onAppear {
+                    if repo.id == repos.last?.id {
+                        Task {
+                            await loadRepos()
+                        }
+                    }
+                }
+            }
+
+            if isLoading {
+                HStack {
+                    Spacer()
+                    ProgressView()
+                    Spacer()
+                }
+            }
+
+            if let errorMessage {
+                Text(errorMessage)
+                    .foregroundColor(.red)
+            }
+        }
+        .navigationTitle("Apple Repos")
+        .task {
+            await loadRepos()
+        }
+    }
+
+    @MainActor
+    private func loadRepos() async {
+        guard !isLoading, canLoadMore else { return }
+
+        isLoading = true
+        errorMessage = nil
+
+        do {
+            let newRepos = try await fetchAppleRepos(page: page)
+            repos.append(contentsOf: newRepos)
+            page += 1
+            canLoadMore = newRepos.count == 10
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+
+        isLoading = false
+    }
+
+    private func fetchAppleRepos(page: Int) async throws -> [AppleRepo] {
+        var components = URLComponents(string: "https://api.github.com/orgs/apple/repos")
+        components?.queryItems = [
+            URLQueryItem(name: "per_page", value: "10"),
+            URLQueryItem(name: "page", value: "\(page)")
+        ]
+
+        guard let url = components?.url else {
+            throw URLError(.badURL)
+        }
+
+        let (data, _) = try await URLSession.shared.data(from: url)
+        return try JSONDecoder().decode([AppleRepo].self, from: data)
+    }
 }
 
 struct EmojiGridView: View {
@@ -158,30 +412,179 @@ struct EmojiGridView: View {
         animation: .default)
     private var emojis: FetchedResults<EmojiItem>
 
+    @State private var displayedEmojis: [EmojiGridItem] = []
+
     var body: some View {
         ScrollView {
             LazyVGrid(columns: columns, spacing: 16) {
-                ForEach(emojis) { emoji in
-                    VStack(spacing: 8) {
-                        AsyncImage(url: URL(string: emoji.url ?? "")) { image in
-                            image
-                                .resizable()
-                                .scaledToFit()
-                        } placeholder: {
-                            ProgressView()
-                        }
-                        .frame(width: 48, height: 48)
+                ForEach(displayedEmojis) { emoji in
+                    Button {
+                        remove(emoji)
+                    } label: {
+                        VStack(spacing: 8) {
+                            CachedEmojiImage(
+                                emojiID: emoji.id,
+                                url: emoji.url,
+                                size: 48
+                            )
 
-                        Text(emoji.name ?? "")
-                            .font(.caption)
-                            .multilineTextAlignment(.center)
-                            .lineLimit(2)
+                            Text(emoji.name)
+                                .font(.caption)
+                                .multilineTextAlignment(.center)
+                                .lineLimit(2)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 96)
                     }
-                    .frame(maxWidth: .infinity, minHeight: 96)
+                    .buttonStyle(.plain)
                 }
             }
             .padding()
         }
         .navigationTitle("Emoji List")
+        .onAppear(perform: resetDisplayedEmojis)
+        .refreshable {
+            resetDisplayedEmojis()
+        }
+    }
+
+    private func remove(_ emoji: EmojiGridItem) {
+        displayedEmojis.removeAll { $0.id == emoji.id }
+    }
+
+    private func resetDisplayedEmojis() {
+        displayedEmojis = emojis.map { emoji in
+            EmojiGridItem(
+                id: emoji.objectID,
+                name: emoji.name ?? "",
+                url: emoji.url ?? ""
+            )
+        }
+    }
+}
+
+struct EmojiGridItem: Identifiable {
+    let id: NSManagedObjectID
+    let name: String
+    let url: String
+}
+
+struct AvatarGridView: View {
+    @Environment(\.managedObjectContext) private var viewContext
+
+    private let columns = [
+        GridItem(.adaptive(minimum: 96), spacing: 16)
+    ]
+
+    @FetchRequest(
+        sortDescriptors: [NSSortDescriptor(keyPath: \UserAvatar.login, ascending: true)],
+        animation: .default)
+    private var avatars: FetchedResults<UserAvatar>
+
+    var body: some View {
+        ScrollView {
+            LazyVGrid(columns: columns, spacing: 16) {
+                ForEach(avatars) { avatar in
+                    Button {
+                        delete(avatar)
+                    } label: {
+                        VStack(spacing: 8) {
+                            if let avatarData = avatar.avatarData,
+                               let avatarImage = UIImage(data: avatarData) {
+                                Image(uiImage: avatarImage)
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(width: 48, height: 48)
+                            } else {
+                                ProgressView()
+                                    .frame(width: 48, height: 48)
+                            }
+
+                            Text(avatar.login ?? "")
+                                .font(.caption)
+                                .multilineTextAlignment(.center)
+                                .lineLimit(2)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 96)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding()
+        }
+        .navigationTitle("Avatar List")
+    }
+
+    private func delete(_ avatar: UserAvatar) {
+        viewContext.delete(avatar)
+
+        do {
+            try viewContext.save()
+        } catch {
+            viewContext.rollback()
+        }
+    }
+}
+
+struct CachedEmojiImage: View {
+    @Environment(\.managedObjectContext) private var viewContext
+
+    let emojiID: NSManagedObjectID
+    let url: String
+    let size: CGFloat
+
+    @State private var image: UIImage?
+    @State private var isLoading = false
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                ProgressView()
+            }
+        }
+        .frame(width: size, height: size)
+        .task(id: emojiID) {
+            await loadImage()
+        }
+    }
+
+    @MainActor
+    private func loadImage() async {
+        image = nil
+
+        if let cachedImage = cachedImage() {
+            image = cachedImage
+            return
+        }
+
+        guard !isLoading, let imageURL = URL(string: url) else { return }
+
+        isLoading = true
+        defer { isLoading = false }
+
+        do {
+            let (data, _) = try await URLSession.shared.data(from: imageURL)
+
+            guard let downloadedImage = UIImage(data: data),
+                  let emoji = try viewContext.existingObject(with: emojiID) as? EmojiItem
+            else { return }
+
+            emoji.imageData = data
+            try viewContext.save()
+            image = downloadedImage
+        } catch {
+            image = nil
+        }
+    }
+
+    private func cachedImage() -> UIImage? {
+        guard let emoji = try? viewContext.existingObject(with: emojiID) as? EmojiItem,
+              let imageData = emoji.imageData
+        else { return nil }
+
+        return UIImage(data: imageData)
     }
 }
